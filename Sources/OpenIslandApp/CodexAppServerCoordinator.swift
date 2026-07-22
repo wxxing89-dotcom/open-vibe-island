@@ -97,7 +97,7 @@ final class CodexAppServerCoordinator {
         do {
             let threads = try await client.listLoadedThreads()
             var created = 0
-            for thread in threads where !thread.ephemeral {
+            for thread in threads where !thread.ephemeral && thread.isUserFacing {
                 // Skip threads already tracked — re-emitting sessionStarted
                 // rebuilds the AgentSession and would wipe richer state
                 // already accumulated from hooks or rediscovery.
@@ -119,6 +119,7 @@ final class CodexAppServerCoordinator {
         switch notification {
         case .threadStarted(let thread):
             guard !thread.ephemeral else { return }
+            guard thread.isUserFacing else { return }
             guard isSessionTracked?(thread.id) != true else { return }
             emitSessionStarted(from: thread)
 
@@ -243,7 +244,8 @@ final class CodexAppServerCoordinator {
     private func emitSessionStarted(from thread: CodexThread) {
         let workspaceName = URL(fileURLWithPath: thread.cwd).lastPathComponent
         let title = thread.name ?? workspaceName
-        let summary = thread.preview.isEmpty ? "Codex session." : String(thread.preview.prefix(120))
+        let userFacingPreview = CodexPromptSanitizer.userFacingText(thread.preview)
+        let summary = userFacingPreview.map { String($0.prefix(120)) } ?? "Codex session."
 
         let phase: SessionPhase
         switch thread.status.type {
@@ -270,7 +272,7 @@ final class CodexAppServerCoordinator {
                 ),
                 codexMetadata: CodexSessionMetadata(
                     transcriptPath: thread.path,
-                    initialUserPrompt: thread.preview.isEmpty ? nil : thread.preview
+                    initialUserPrompt: userFacingPreview
                 )
             )
         ))
