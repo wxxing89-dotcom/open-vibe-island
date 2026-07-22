@@ -837,6 +837,47 @@ struct CodexSessionTrackingTests {
     }
 
     @Test
+    func codexRolloutReducerSkipsRecommendedPluginsInjectedBlock() {
+        let snapshot = CodexRolloutReducer.snapshot(for: [
+            rolloutLine(
+                timestamp: "2026-07-22T03:11:10.000Z",
+                type: "response_item",
+                payload: [
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        [
+                            "type": "input_text",
+                            "text": "<recommended_plugins>\n- Figma\n- Slack\n</recommended_plugins>",
+                        ],
+                        [
+                            "type": "input_text",
+                            "text": "<environment_context>\n  <cwd>/tmp/repo</cwd>\n</environment_context>",
+                        ],
+                    ],
+                ]
+            ),
+            rolloutLine(
+                timestamp: "2026-07-22T03:11:11.000Z",
+                type: "response_item",
+                payload: [
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        [
+                            "type": "input_text",
+                            "text": "# Files mentioned by the user:\n\n## My request for Codex:\n让灵动岛显示具体任务名称。",
+                        ],
+                    ],
+                ]
+            ),
+        ])
+
+        #expect(snapshot.initialUserPrompt == "让灵动岛显示具体任务名称。")
+        #expect(snapshot.lastUserPrompt == "让灵动岛显示具体任务名称。")
+    }
+
+    @Test
     func codexRolloutWatcherTracksAppendedLines() async throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("open-island-rollout-\(UUID().uuidString)", isDirectory: true)
@@ -1325,6 +1366,62 @@ struct CodexSessionTrackingTests {
         #expect(records.first?.sessionID == "codex-session-trailing")
         #expect(records.first?.codexMetadata?.lastAssistantMessage == "Final line without newline.")
     }
+
+    @Test
+    func codexRolloutDiscoverySkipsSubagentThreads() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-discovery-subagent-\(UUID().uuidString)", isDirectory: true)
+        let rolloutDirectoryURL = rootURL.appendingPathComponent("2026/07/22", isDirectory: true)
+        let userRolloutURL = rolloutDirectoryURL.appendingPathComponent("rollout-user.jsonl")
+        let guardianRolloutURL = rolloutDirectoryURL.appendingPathComponent("rollout-guardian.jsonl")
+        let now = Date(timeIntervalSince1970: 1_784_709_695)
+
+        try FileManager.default.createDirectory(at: rolloutDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let userLines = [
+            sessionMetaLine(
+                sessionID: "codex-user-session",
+                timestamp: "2026-07-22T08:24:54.000Z",
+                cwd: "/Users/test/project"
+            ),
+            rolloutLine(
+                timestamp: "2026-07-22T08:24:55.000Z",
+                type: "event_msg",
+                payload: ["type": "user_message", "message": "修复灵动岛任务标题。"]
+            ),
+        ]
+        let guardianLines = [
+            sessionMetaLine(
+                sessionID: "codex-guardian-session",
+                timestamp: "2026-07-22T08:24:55.000Z",
+                cwd: "/Users/test/project",
+                threadSource: "subagent",
+                parentThreadID: "codex-user-session"
+            ),
+            rolloutLine(
+                timestamp: "2026-07-22T08:24:56.000Z",
+                type: "event_msg",
+                payload: ["type": "user_message", "message": "The following is the Codex agent history..."]
+            ),
+        ]
+
+        try userLines.joined(separator: "\n").appending("\n").write(to: userRolloutURL, atomically: true, encoding: .utf8)
+        try guardianLines.joined(separator: "\n").appending("\n").write(to: guardianRolloutURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: userRolloutURL.path)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: guardianRolloutURL.path)
+
+        let discovery = CodexRolloutDiscovery(
+            rootURL: rootURL,
+            fileManager: .default,
+            maxAge: 86_400,
+            maxFiles: 10
+        )
+
+        let records = discovery.discoverRecentSessions(now: now)
+
+        #expect(records.map(\.sessionID) == ["codex-user-session"])
+    }
 }
 
 private final class MissingTranscriptFileManager: FileManager, @unchecked Sendable {
@@ -1376,18 +1473,28 @@ private func rolloutLine(
 private func sessionMetaLine(
     sessionID: String,
     timestamp: String,
-    cwd: String
+    cwd: String,
+    threadSource: String? = nil,
+    parentThreadID: String? = nil
 ) -> String {
-    rolloutLine(
+    var payload: [String: Any] = [
+        "id": sessionID,
+        "timestamp": timestamp,
+        "cwd": cwd,
+        "originator": "codex-tui",
+        "source": "cli",
+    ]
+    if let threadSource {
+        payload["thread_source"] = threadSource
+    }
+    if let parentThreadID {
+        payload["parent_thread_id"] = parentThreadID
+    }
+
+    return rolloutLine(
         timestamp: timestamp,
         type: "session_meta",
-        payload: [
-            "id": sessionID,
-            "timestamp": timestamp,
-            "cwd": cwd,
-            "originator": "codex-tui",
-            "source": "cli",
-        ]
+        payload: payload
     )
 }
 
