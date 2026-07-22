@@ -530,6 +530,12 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         }
 
         let payload = object["payload"] as? [String: Any] ?? [:]
+        guard CodexThreadVisibility.isUserFacing(
+            threadSource: payload["thread_source"] as? String,
+            parentThreadID: payload["parent_thread_id"] as? String
+        ) else {
+            return nil
+        }
         guard let sessionID = payload["id"] as? String,
               !sessionID.isEmpty,
               let cwd = payload["cwd"] as? String,
@@ -727,7 +733,10 @@ public enum CodexRolloutReducer {
             snapshot.isInterrupted = false
             snapshot.summary = snapshot.summary ?? "Codex started a new turn."
         case "user_message":
-            guard let message = clipped(payload["message"] as? String), !message.isEmpty else {
+            guard let rawMessage = payload["message"] as? String,
+                  let userMessage = CodexPromptSanitizer.userFacingText(rawMessage),
+                  let message = clipped(userMessage),
+                  !message.isEmpty else {
                 break
             }
 
@@ -1345,8 +1354,8 @@ public enum CodexRolloutReducer {
                 return nil
             }
 
-            if skipsInjectedBlocks, isInjectedPromptBlock(trimmed) {
-                return nil
+            if skipsInjectedBlocks {
+                return CodexPromptSanitizer.userFacingText(trimmed)
             }
 
             return trimmed
@@ -1357,14 +1366,6 @@ public enum CodexRolloutReducer {
         }
 
         return clipped(segments.joined(separator: " "))
-    }
-
-    private static func isInjectedPromptBlock(_ text: String) -> Bool {
-        text.hasPrefix("# AGENTS.md instructions for ")
-            || text.hasPrefix("<environment_context>")
-            || text.hasPrefix("<permissions instructions>")
-            || text.hasPrefix("<collaboration_mode>")
-            || text.hasPrefix("<skills_instructions>")
     }
 
     private static func clipped(_ value: String?, limit: Int = 110) -> String? {
