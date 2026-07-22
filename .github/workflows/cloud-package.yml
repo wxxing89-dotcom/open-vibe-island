@@ -1,0 +1,32 @@
+name: Cloud Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/filter-codex-internal-threads
+
+jobs:
+  package:
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging dependencies
+        run: |
+          brew install create-dmg
+          pip3 install --break-system-packages Pillow
+
+      - name: Build Open Island
+        env:
+          OPEN_ISLAND_VERSION: 1.1.6-task-title-fix
+        run: zsh scripts/package-app.sh
+
+      - name: Upload application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Island-task-title-fix
+          path: output/package/Open Island.zip
+          if-no-files-found: error
+          retention-days: 7
